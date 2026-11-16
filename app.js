@@ -8,6 +8,8 @@ if ('serviceWorker' in navigator) {
 }
 
 const formulario = document.getElementById('form-incidencia');
+const btnEnviar = formulario.querySelector('button[type="submit"]');
+let enviando = false;
 const inputTitulo = document.getElementById('titulo');
 const inputDescripcion = document.getElementById('descripcion');
 const listaOutbox = document.getElementById('lista-outbox');
@@ -88,12 +90,12 @@ function procesarEnvioReporte(datosFormulario) {
               .then((registro) => {
                 console.log('[Outbox] Registrando etiqueta sync-reportes en el SW...');
                 return registro.sync.register('sync-reportes');
-              });
+              })
+              .catch((error) => console.error('[Outbox] No se pudo registrar el sync:', error));
           }
         });
     })
     .then(() => {
-      // Actualizar la lista visual en ambos escenarios
       return renderizarColaOutbox();
     });
 }
@@ -150,17 +152,50 @@ function purgarSincronizados() {
     });
 }
 
+// RE-ARMADO DE BACKGROUND SYNC: Chrome descarta la etiqueta 'sync-reportes' tras agotar sus
+// reintentos (p. ej. con red inestable) y los registros quedan 'pendiente' para siempre.
+// Si hay pendientes, se vuelve a registrar la etiqueta. Esta función NO envía nada:
+// el único que hace el POST sigue siendo sw.js, así que no hay peticiones duplicadas.
+function reprogramarSyncSiHayPendientes() {
+  if (!('serviceWorker' in navigator) || !('SyncManager' in window)) {
+    return Promise.resolve();
+  }
+
+  return obtenerTodosLosRegistros()
+    .then((registros) => {
+      const hayPendientes = registros.some((item) => item.estado === 'pendiente');
+      if (!hayPendientes) return;
+
+      return navigator.serviceWorker.ready
+        .then((registro) => {
+          console.log('[Outbox] Hay pendientes: re-armando etiqueta sync-reportes...');
+          return registro.sync.register('sync-reportes');
+        });
+    })
+    .catch((error) => console.error('[Outbox] No se pudo re-armar el sync:', error));
+}
+
+
 formulario.addEventListener('submit', (e) => {
   e.preventDefault();
+  if (enviando) return;               // ignora un segundo envío en curso
+  enviando = true;
+  btnEnviar.disabled = true;
+  btnEnviar.textContent = 'Enviando...';
 
   const datos = {
     titulo: inputTitulo.value.trim(),
     descripcion: inputDescripcion.value.trim()
   };
 
-  procesarEnvioReporte(datos).then(() => {
-    formulario.reset();
-  });
+  procesarEnvioReporte(datos)
+    .then(() => formulario.reset())
+    .catch((error) => console.error('[Outbox] Error al procesar el envío:', error))
+    .then(() => {
+      enviando = false;
+      btnEnviar.disabled = false;
+      btnEnviar.textContent = 'Enviar Reporte';
+    });
 });
 
 btnPurgar.addEventListener('click', () => {
@@ -185,6 +220,15 @@ actualizarIndicadorRed();
 renderizarColaOutbox().catch((error) => {
   console.error('[Outbox] No se pudo leer la bandeja al iniciar:', error);
 });
+
+// Re-armar el sync si quedaron pendientes atascados de una sesión anterior
+reprogramarSyncSiHayPendientes();
+
+// Re-armar al volver a la app o al recuperar conexión (listeners separados: no tocan el de arriba)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') reprogramarSyncSiHayPendientes();
+});
+window.addEventListener('online', reprogramarSyncSiHayPendientes);
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
