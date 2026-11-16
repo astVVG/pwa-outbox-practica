@@ -66,3 +66,32 @@ function eliminarRegistro(id) {
     });
   });
 }
+
+function actualizarEstadoRegistro(id, nuevoEstado) {
+  return abrirDB().then((db) => {
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction([STORE_NAME], 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+
+      // 1. Obtener el registro actual por su llave primaria
+      const reqGet = store.get(id);
+
+      reqGet.onsuccess = (event) => {
+        const registro = event.target.result;
+        if (!registro) {
+          reject(new Error(`No se encontró el registro con ID: ${id}`));
+          return;
+        }
+
+        // 2. Modificar la propiedad y sobrescribir con .put()
+        registro.estado = nuevoEstado;
+        registro.fechaSincronizacion = Date.now();
+        store.put(registro);
+      };
+
+      // 3. Resolver la promesa cuando la transacción completa el guardado en disco
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = (event) => reject(event.target.error);
+    });
+  });
+}
